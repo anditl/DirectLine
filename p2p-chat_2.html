@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P2P Chat — Direktverbindung</title>
+
+<!-- PeerJS wird über CDN eingebunden. PeerJS kapselt WebRTC (DataChannel) und übernimmt
+     nur das initiale "Signaling" (Adressvermittlung über einen öffentlichen Broker-Server).
+     Die eigentlichen Chat-Daten fließen danach direkt (P2P) zwischen den Browsern. -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+<style>
+  :root{
+    --bg-0:#0d0e14;
+    --bg-1:#14151f;
+    --bg-2:#1b1c29;
+    --line:#2a2b3d;
+    --text-0:#eceaf7;
+    --text-1:#9d9cb8;
+    --accent-a:#7c5cff;
+    --accent-b:#4a8cff;
+    --ok:#3ddc97;
+    --danger:#ff5c7a;
+    --radius:14px;
+    --font-display:"Space Grotesk","Segoe UI",sans-serif;
+    --font-body:"Inter","Segoe UI",sans-serif;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:
+      radial-gradient(circle at 15% -10%, rgba(124,92,255,.18), transparent 45%),
+      radial-gradient(circle at 100% 10%, rgba(74,140,255,.12), transparent 40%),
+      var(--bg-0);
+    color:var(--text-0);
+    font-family:var(--font-body);
+  }
+
+  h1,h2,h3{ font-family:var(--font-display); margin:0; letter-spacing:.2px; }
+
+  ::selection{ background:var(--accent-a); color:#fff; }
+
+  button{
+    font-family:inherit; cursor:pointer; border:none; border-radius:10px;
+    transition:transform .12s ease, filter .12s ease, background .15s ease;
+  }
+  button:active{ transform:scale(.97); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible{
+    outline:2px solid var(--accent-b); outline-offset:2px;
+  }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+
+  input[type="text"], input[type="password"]{
+    background:var(--bg-2); border:1px solid var(--line); color:var(--text-0);
+    border-radius:10px; padding:10px 12px; font-size:14px; width:100%;
+  }
+
+  .btn-primary{
+    background:linear-gradient(135deg,var(--accent-a),var(--accent-b));
+    color:#fff; font-weight:600; padding:11px 18px;
+  }
+  .btn-primary:hover{ filter:brightness(1.1); }
+
+  .btn-ghost{
+    background:transparent; border:1px solid var(--line); color:var(--text-0);
+    padding:10px 14px; font-size:13px;
+  }
+  .btn-ghost:hover{ background:var(--bg-2); }
+
+  .btn-danger{
+    background:rgba(255,92,122,.14); color:var(--danger); border:1px solid rgba(255,92,122,.35);
+    padding:6px 12px; font-size:12px; font-weight:600;
+  }
+  .btn-danger:hover{ background:rgba(255,92,122,.25); }
+
+  /* ---------- App Shell ---------- */
+  #app{
+    max-width:1180px; margin:0 auto; padding:28px 20px 40px;
+    min-height:100%; display:flex; flex-direction:column; gap:22px;
+  }
+
+  .topbar{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand .dot{
+    width:11px; height:11px; border-radius:50%;
+    background:linear-gradient(135deg,var(--accent-a),var(--accent-b));
+    box-shadow:0 0 14px rgba(124,92,255,.7);
+  }
+  .brand span{ font-size:20px; font-weight:700; }
+
+  .status-pill{
+    display:flex; align-items:center; gap:8px;
+    background:var(--bg-1); border:1px solid var(--line);
+    padding:7px 14px; border-radius:999px; font-size:13px; color:var(--text-1);
+  }
+  .status-pill .indicator{
+    width:8px; height:8px; border-radius:50%; background:var(--text-1); flex:none;
+  }
+  .status-pill.connected .indicator{ background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  .status-pill.waiting .indicator{ background:#f5b942; box-shadow:0 0 8px #f5b942; }
+  .status-pill.error .indicator{ background:var(--danger); box-shadow:0 0 8px var(--danger); }
+
+  /* ---------- Setup Screen ---------- */
+  #setup{ display:grid; gap:20px; }
+
+  .identity-card{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px; display:flex; gap:18px; align-items:center; flex-wrap:wrap;
+  }
+  .avatar-wrap{ position:relative; flex:none; }
+  .avatar{
+    width:64px; height:64px; border-radius:50%; object-fit:cover;
+    border:2px solid var(--line); display:block; background:var(--bg-2);
+  }
+  .avatar-edit{
+    position:absolute; bottom:-2px; right:-2px; width:24px; height:24px; border-radius:50%;
+    background:var(--accent-a); display:flex; align-items:center; justify-content:center;
+    font-size:12px; border:2px solid var(--bg-1);
+  }
+  .identity-fields{ flex:1; min-width:200px; display:flex; flex-direction:column; gap:8px; }
+  .identity-fields label{ font-size:12px; color:var(--text-1); }
+
+  .options-grid{ display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width:760px){ .options-grid{ grid-template-columns:1fr; } }
+
+  .option-card{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius);
+    padding:22px; display:flex; flex-direction:column; gap:14px;
+  }
+  .option-card .eyebrow{ font-size:12px; color:var(--accent-b); font-weight:700; letter-spacing:1.5px; text-transform:uppercase; }
+  .option-card p.desc{ font-size:13px; color:var(--text-1); margin:0; line-height:1.5; }
+  .field-label{ font-size:12px; color:var(--text-1); margin-bottom:-6px; }
+
+  .room-id-display{
+    display:flex; align-items:center; gap:8px; background:var(--bg-2);
+    border:1px dashed var(--line); border-radius:10px; padding:10px 12px;
+  }
+  .room-id-display code{
+    flex:1; font-size:20px; letter-spacing:3px; font-weight:700; color:var(--accent-b);
+  }
+
+  .join-row{ display:flex; gap:8px; }
+  .join-row input{ text-transform:uppercase; letter-spacing:2px; }
+
+  .hint{ font-size:12px; color:var(--text-1); }
+  .hint.err{ color:var(--danger); }
+
+  /* ---------- Chat Screen ---------- */
+  #chatArea{
+    display:none; gap:20px; grid-template-columns:1fr 300px; flex:1; min-height:0;
+  }
+  #chatArea.active{ display:grid; }
+  @media (max-width:820px){
+    #chatArea.active{ grid-template-columns:1fr; }
+    #sidebar{ order:2; }
+  }
+
+  .panel{
+    background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+
+  #chatPanel{ min-height:60vh; }
+
+  .chat-header{
+    padding:14px 18px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .chat-header .room-tag{ font-size:11px; color:var(--text-1); letter-spacing:1px; }
+
+  .call-controls{ display:flex; gap:8px; align-items:center; }
+  .btn-call{
+    background:rgba(61,220,151,.14); color:var(--ok); border:1px solid rgba(61,220,151,.4);
+    padding:9px 16px; font-size:13px; font-weight:600;
+  }
+  .btn-call:hover{ background:rgba(61,220,151,.25); }
+  .btn-call.in-call{
+    background:rgba(255,92,122,.14); color:var(--danger); border:1px solid rgba(255,92,122,.4);
+  }
+  .btn-call.in-call:hover{ background:rgba(255,92,122,.25); }
+  #muteBtn.muted{ background:rgba(255,92,122,.14); border-color:rgba(255,92,122,.4); color:var(--danger); }
+
+  #messages{
+    flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:10px;
+  }
+  #messages::-webkit-scrollbar{ width:8px; }
+  #messages::-webkit-scrollbar-thumb{ background:var(--line); border-radius:8px; }
+
+  .msg-row{ display:flex; gap:8px; max-width:80%; align-items:flex-end; }
+  .msg-row.own{ align-self:flex-end; flex-direction:row-reverse; }
+  .msg-row img.msg-avatar{
+    width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:var(--bg-2);
+  }
+  .bubble{
+    padding:10px 14px; border-radius:16px; font-size:14px; line-height:1.4; word-break:break-word;
+    background:var(--bg-2); border:1px solid var(--line); color:var(--text-0);
+  }
+  .msg-row.own .bubble{
+    background:linear-gradient(135deg,#1f5f4b,#1a4a3c);
+    border-color:#2a6a54;
+    border-bottom-right-radius:4px;
+  }
+  .msg-row:not(.own) .bubble{
+    background:#23242f; border-bottom-left-radius:4px;
+  }
+  .msg-meta{ font-size:10px; color:var(--text-1); margin-top:3px; }
+
+  .system-msg{
+    text-align:center; font-size:12px; color:var(--text-1); padding:4px 0;
+  }
+
+  .composer{
+    display:flex; gap:10px; padding:14px 18px; border-top:1px solid var(--line);
+  }
+  .composer input{ flex:1; }
+
+  /* ---------- Sidebar / Admin ---------- */
+  #sidebar{ padding:18px; gap:16px; }
+  .sidebar-title{ font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-1); font-weight:700; }
+
+  .profile-card{
+    display:flex; align-items:center; gap:12px; background:var(--bg-2);
+    border:1px solid var(--line); border-radius:12px; padding:12px;
+  }
+  .profile-card img{ width:44px; height:44px; border-radius:50%; object-fit:cover; flex:none; }
+  .profile-card .name{ font-weight:600; font-size:14px; }
+  .profile-card .role{ font-size:11px; color:var(--accent-b); }
+
+  #sidebar .section{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+
+  .participant-row{
+    display:flex; align-items:center; gap:10px; background:var(--bg-2);
+    border:1px solid var(--line); border-radius:12px; padding:9px 10px;
+  }
+  .participant-row img{ width:36px; height:36px; border-radius:50%; object-fit:cover; flex:none; }
+  .participant-row .info{ flex:1; min-width:0; }
+  .participant-row .name{ font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .participant-row .role{ font-size:10px; color:var(--accent-b); }
+  .participant-row.in-call{ border-color:rgba(61,220,151,.5); }
+  .call-badge{
+    font-size:11px; color:var(--ok); display:flex; align-items:center; gap:3px; flex:none;
+  }
+
+  #participantCount{ color:var(--text-1); font-weight:400; }
+
+  footer.app-footer{ text-align:center; font-size:11px; color:var(--text-1); padding-top:6px; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span><span>DirectLine</span></div>
+    <div class="status-pill waiting" id="statusPill">
+      <span class="indicator"></span>
+      <span id="statusText">Bereit</span>
+    </div>
+  </div>
+
+  <!-- ================= SETUP SCREEN ================= -->
+  <div id="setup">
+
+    <div class="identity-card">
+      <div class="avatar-wrap">
+        <img id="avatarPreview" class="avatar" alt="Profilbild">
+        <div class="avatar-edit">✎</div>
+        <input type="file" id="avatarInput" accept="image/*" style="position:absolute; inset:0; opacity:0; cursor:pointer;">
+      </div>
+      <div class="identity-fields">
+        <label for="nameInput">Dein Anzeigename</label>
+        <input type="text" id="nameInput" maxlength="24">
+        <span class="hint">Name und Profilbild werden lokal gespeichert und beim nächsten Besuch wiederverwendet.</span>
+      </div>
+    </div>
+
+    <div class="options-grid">
+
+      <!-- Option A: Host -->
+      <div class="option-card">
+        <span class="eyebrow">Option A</span>
+        <h2>Raum erstellen</h2>
+        <p class="desc">Du wirst Host dieses Raums und erhältst automatisch Admin-Rechte. Vergib ein Passwort — nur wer es kennt, kann beitreten.</p>
+        <span class="field-label">Raum-Passwort</span>
+        <input type="password" id="hostPasswordInput" placeholder="Passwort festlegen …">
+        <button class="btn-primary" id="createRoomBtn">Raum erstellen</button>
+        <div id="hostIdBox" style="display:none;">
+          <div class="room-id-display">
+            <code id="hostIdText">–</code>
+            <button class="btn-ghost" id="copyIdBtn">Kopieren</button>
+          </div>
+          <p class="hint" id="hostStatusHint">Warte auf Teilnehmer …</p>
+        </div>
+      </div>
+
+      <!-- Option B: Guest -->
+      <div class="option-card">
+        <span class="eyebrow">Option B</span>
+        <h2>Raum beitreten</h2>
+        <p class="desc">Gib die Raum-ID und das Passwort ein, um dich direkt per WebRTC zu verbinden. Mehrere Personen können demselben Raum beitreten.</p>
+        <span class="field-label">Raum-ID</span>
+        <input type="text" id="joinIdInput" placeholder="z. B. 7XK4QP" maxlength="6">
+        <span class="field-label">Passwort</span>
+        <input type="password" id="joinPasswordInput" placeholder="Raum-Passwort">
+        <button class="btn-primary" id="joinRoomBtn">Beitreten</button>
+        <p class="hint err" id="joinErrorHint" style="display:none;"></p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ================= CHAT SCREEN ================= -->
+  <div id="chatArea">
+    <div class="panel" id="chatPanel">
+      <div class="chat-header">
+        <div>
+          <h3 id="chatTitle">Chat</h3>
+          <span class="room-tag" id="roomTag"></span>
+        </div>
+        <div class="call-controls">
+          <button class="btn-ghost" id="muteBtn" style="display:none;" title="Mikrofon stumm/laut">🎤</button>
+          <button class="btn-call" id="callBtn">📞 Anruf beitreten</button>
+        </div>
+      </div>
+      <div id="messages"></div>
+      <div class="composer">
+        <input type="text" id="msgInput" placeholder="Nachricht schreiben …" maxlength="1000" disabled>
+        <button class="btn-primary" id="sendBtn" disabled>Senden</button>
+      </div>
+    </div>
+
+    <div class="panel" id="sidebar">
+      <span class="sidebar-title">Mein Profil</span>
+      <div class="profile-card">
+        <img id="myProfileImg" alt="">
+        <div>
+          <div class="name" id="myProfileName">–</div>
+          <div class="role" id="myProfileRole">–</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <span class="sidebar-title">Teilnehmer <span id="participantCount"></span></span>
+        <div id="participantList"></div>
+        <p class="hint" id="noPeerHint">Noch niemand verbunden.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">Direkte P2P-Verbindung über WebRTC · Keine Nachricht läuft über einen fremden Server</footer>
+</div>
+
+<script>
+/* =========================================================================
+   P2P CHAT — Architektur in Kurzform (Stern-Topologie über den Host)
+   1. PeerJS erzeugt für jeden Client eine Peer-ID über einen öffentlichen
+      Signaling-Server (nur für den Verbindungsaufbau nötig).
+   2. Der HOST vergibt sich selbst eine kurze, gut merkbare Raum-ID
+      ("new Peer(kurzeId)") und wartet passiv auf eingehende Verbindungen.
+   3. Jeder GUEST verbindet sich direkt zur Raum-ID des Hosts
+      ("peer.connect(raumId)") und schickt beim Handshake Name, Avatar
+      und das Raum-Passwort mit.
+   4. Der Host ist damit der zentrale Knotenpunkt: Chat-Nachrichten eines
+      Gastes werden vom Host an alle anderen Gäste weitergeleitet
+      (Broadcast). Es läuft weiterhin alles über direkte WebRTC-Verbindungen
+      und benötigt keinen eigenen Server — der Host übernimmt nur die
+      Vermittlerrolle innerhalb des Raums.
+   5. Nur der Host hat Admin-Rechte (z. B. einzelne Teilnehmer kicken).
+   ========================================================================= */
+
+// ---- Hilfsfunktionen ----------------------------------------------------
+
+// Verhindert XSS: wandelt Sonderzeichen in ihre HTML-Entities um, bevor
+// irgendein nutzergenerierter Text ins DOM geschrieben wird.
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Standard-Avatar als eingebettetes SVG (Data-URL) — dient als Fallback,
+// solange kein eigenes Profilbild hochgeladen wurde.
+const DEFAULT_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect width="100" height="100" fill="#23242f"/>
+    <circle cx="50" cy="38" r="18" fill="#5c5d75"/>
+    <path d="M18 90 Q50 60 82 90 Z" fill="#5c5d75"/>
+  </svg>`);
+
+const ADJECTIVES = ['Stille', 'Wilde', 'Blaue', 'Ferne', 'Neue', 'Kluge', 'Freie', 'Helle'];
+const NOUNS = ['Falke', 'Fuchs', 'Komet', 'Nebel', 'Wolf', 'Pinguin', 'Delfin', 'Adler'];
+function randomName() {
+  const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const n = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  return `${a}${n}${Math.floor(Math.random() * 90 + 10)}`;
+}
+
+// Kurze, gut lesbare Raum-ID (6 Zeichen, ohne verwechselbare Zeichen wie 0/O/1/I).
+const ROOM_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function generateRoomCode() {
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)];
+  }
+  return code;
+}
+
+// ---- Account-Persistenz (localStorage) -------------------------------------
+// Name und Profilbild bleiben über Seitenaufrufe hinweg erhalten, damit
+// der Nutzer seinen "Account" (Identität) nicht jedes Mal neu einrichten muss.
+const STORAGE_KEY_NAME = 'p2pchat_name';
+const STORAGE_KEY_AVATAR = 'p2pchat_avatar';
+
+let myName = localStorage.getItem(STORAGE_KEY_NAME) || randomName();
+let myAvatar = localStorage.getItem(STORAGE_KEY_AVATAR) || DEFAULT_AVATAR;
+if (!localStorage.getItem(STORAGE_KEY_NAME)) localStorage.setItem(STORAGE_KEY_NAME, myName);
+
+let myRole = null;          // 'host' | 'guest'
+let peer = null;            // eigene PeerJS-Instanz
+let roomPassword = null;    // nur dem Host bekannt, wird beim Handshake geprüft
+let roomId = null;
+
+// connections: Map von peerId -> { conn, name, avatar, role }
+// Beim Host enthält diese Map alle verbundenen Gäste.
+// Beim Guest enthält diese Map (informativ) alle bekannten Teilnehmer des Raums.
+const connections = new Map();
+let hostConn = null; // beim Guest: die eine Verbindung zum Host
+
+// ---- Anruf-Status (Sprachanruf per WebRTC-Mediastream über PeerJS) ---------
+// mediaConnections: peerId -> PeerJS MediaConnection (eine je Gesprächspartner,
+// zusammen bilden sie ein Mesh — jeder Teilnehmer im Anruf ist direkt mit
+// jedem anderen Teilnehmer im Anruf per Audio-Stream verbunden).
+let localStream = null;   // eigenes Mikrofon
+let inCall = false;       // bin ich gerade im Anruf?
+let micMuted = false;
+const mediaConnections = new Map();
+const remoteAudioEls = new Map();
+
+// ---- DOM-Referenzen -------------------------------------------------------
+
+const nameInput = document.getElementById('nameInput');
+const avatarInput = document.getElementById('avatarInput');
+const avatarPreview = document.getElementById('avatarPreview');
+
+const hostPasswordInput = document.getElementById('hostPasswordInput');
+const createRoomBtn = document.getElementById('createRoomBtn');
+const hostIdBox = document.getElementById('hostIdBox');
+const hostIdText = document.getElementById('hostIdText');
+const copyIdBtn = document.getElementById('copyIdBtn');
+const hostStatusHint = document.getElementById('hostStatusHint');
+
+const joinIdInput = document.getElementById('joinIdInput');
+const joinPasswordInput = document.getElementById('joinPasswordInput');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+const joinErrorHint = document.getElementById('joinErrorHint');
+
+const setupEl = document.getElementById('setup');
+const chatArea = document.getElementById('chatArea');
+const messagesEl = document.getElementById('messages');
+const msgInput = document.getElementById('msgInput');
+const sendBtn = document.getElementById('sendBtn');
+const chatTitle = document.getElementById('chatTitle');
+const roomTag = document.getElementById('roomTag');
+
+const statusPill = document.getElementById('statusPill');
+const statusText = document.getElementById('statusText');
+
+const myProfileImg = document.getElementById('myProfileImg');
+const myProfileName = document.getElementById('myProfileName');
+const myProfileRole = document.getElementById('myProfileRole');
+
+const participantList = document.getElementById('participantList');
+const participantCount = document.getElementById('participantCount');
+const noPeerHint = document.getElementById('noPeerHint');
+
+const callBtn = document.getElementById('callBtn');
+const muteBtn = document.getElementById('muteBtn');
+
+// ---- Initiale UI-Werte -----------------------------------------------------
+
+nameInput.value = myName;
+avatarPreview.src = myAvatar;
+myProfileImg.src = myAvatar;
+myProfileName.textContent = myName;
+
+nameInput.addEventListener('input', () => {
+  myName = nameInput.value.trim() || randomName();
+  myProfileName.textContent = myName;
+  localStorage.setItem(STORAGE_KEY_NAME, myName);
+});
+
+avatarInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  // Profilbild wird als Base64-String eingelesen, damit es später problemlos
+  // als JSON-Feld über den DataChannel verschickt und lokal gespeichert werden kann.
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    myAvatar = ev.target.result;
+    avatarPreview.src = myAvatar;
+    myProfileImg.src = myAvatar;
+    localStorage.setItem(STORAGE_KEY_AVATAR, myAvatar);
+  };
+  reader.readAsDataURL(file);
+});
+
+function setStatus(mode, text) {
+  statusPill.className = 'status-pill ' + mode;
+  statusText.textContent = text;
+}
+
+// ---- Peer-Erstellung -------------------------------------------------------
+
+// customId: optionale gewünschte (kurze) ID, z. B. für den Host-Raum.
+function createPeer(customId, onOpen, onFatalError) {
+  peer = customId ? new Peer(customId) : new Peer();
+  peer.on('open', (id) => onOpen(id));
+  peer.on('error', (err) => {
+    console.error('PeerJS-Fehler:', err);
+    if (onFatalError) onFatalError(err);
+  });
+
+  // Eingehende Anruf-Anfrage (WebRTC MediaConnection, unabhängig vom Text-DataChannel).
+  // Wird nur angenommen, wenn ich selbst gerade im Anruf bin — sonst bleibt der
+  // Sprachanruf ein optionaler "Raum", dem man freiwillig beitritt.
+  peer.on('call', (mediaConn) => {
+    if (!inCall || !localStream) {
+      mediaConn.close();
+      return;
+    }
+    mediaConn.answer(localStream);
+    registerMediaConnection(mediaConn);
+  });
+}
+
+// Verbindet eine eingehende oder ausgehende MediaConnection mit der UI:
+// spielt den empfangenen Audio-Stream des Gesprächspartners automatisch ab.
+function registerMediaConnection(mediaConn) {
+  mediaConnections.set(mediaConn.peer, mediaConn);
+
+  mediaConn.on('stream', (remoteStream) => {
+    let audioEl = remoteAudioEls.get(mediaConn.peer);
+    if (!audioEl) {
+      audioEl = document.createElement('audio');
+      audioEl.autoplay = true;
+      audioEl.style.display = 'none';
+      document.body.appendChild(audioEl);
+      remoteAudioEls.set(mediaConn.peer, audioEl);
+    }
+    audioEl.srcObject = remoteStream;
+  });
+
+  mediaConn.on('close', () => cleanupMediaConnection(mediaConn.peer));
+  mediaConn.on('error', () => cleanupMediaConnection(mediaConn.peer));
+}
+
+function cleanupMediaConnection(peerId) {
+  const audioEl = remoteAudioEls.get(peerId);
+  if (audioEl) { audioEl.remove(); remoteAudioEls.delete(peerId); }
+  mediaConnections.delete(peerId);
+}
+
+// ---- Anruf beitreten / verlassen / stummschalten ---------------------------
+
+async function joinCall() {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    alert('Mikrofon-Zugriff wurde verweigert oder ist nicht verfügbar.');
+    return;
+  }
+
+  inCall = true;
+  micMuted = false;
+  updateCallButtonUI();
+
+  // Alle Teilnehmer anrufen, die sich bereits im Anruf befinden — so entsteht
+  // nach und nach ein vollvermaschtes Audio-Netz zwischen allen Anruf-Teilnehmern.
+  connections.forEach((p, id) => {
+    if (p.inCall) {
+      const mediaConn = peer.call(id, localStream);
+      registerMediaConnection(mediaConn);
+    }
+  });
+
+  // Alle im Raum darüber informieren, dass ich jetzt im Anruf bin.
+  if (myRole === 'host') {
+    broadcast({ type: 'call-join', id: peer.id });
+  } else if (hostConn) {
+    hostConn.send({ type: 'call-join', id: peer.id });
+  }
+
+  refreshParticipantUI();
+}
+
+function leaveCall() {
+  inCall = false;
+  micMuted = false;
+
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  mediaConnections.forEach((mc) => { try { mc.close(); } catch (e) {} });
+  mediaConnections.clear();
+  remoteAudioEls.forEach((el) => el.remove());
+  remoteAudioEls.clear();
+
+  updateCallButtonUI();
+
+  if (myRole === 'host') {
+    broadcast({ type: 'call-leave', id: peer.id });
+  } else if (hostConn) {
+    hostConn.send({ type: 'call-leave', id: peer.id });
+  }
+
+  refreshParticipantUI();
+}
+
+function toggleMute() {
+  if (!localStream) return;
+  micMuted = !micMuted;
+  localStream.getAudioTracks().forEach((t) => (t.enabled = !micMuted));
+  muteBtn.textContent = micMuted ? '🔇' : '🎤';
+  muteBtn.classList.toggle('muted', micMuted);
+}
+
+function updateCallButtonUI() {
+  if (inCall) {
+    callBtn.textContent = '📞 Anruf verlassen';
+    callBtn.classList.add('in-call');
+    muteBtn.style.display = 'inline-block';
+    muteBtn.textContent = '🎤';
+    muteBtn.classList.remove('muted');
+  } else {
+    callBtn.textContent = '📞 Anruf beitreten';
+    callBtn.classList.remove('in-call');
+    muteBtn.style.display = 'none';
+  }
+}
+
+callBtn.addEventListener('click', () => {
+  if (inCall) leaveCall();
+  else joinCall();
+});
+muteBtn.addEventListener('click', toggleMute);
+
+// ---- OPTION A: Raum erstellen (Host) ---------------------------------------
+
+createRoomBtn.addEventListener('click', () => {
+  const pw = hostPasswordInput.value;
+  if (!pw) {
+    hostPasswordInput.focus();
+    return;
+  }
+  roomPassword = pw;
+  myRole = 'host';
+  createRoomBtn.disabled = true;
+  setStatus('waiting', 'Erzeuge Raum …');
+
+  tryCreateHostRoom(0);
+});
+
+// Da die kurze Raum-ID theoretisch (selten) bereits vergeben sein kann,
+// wird bei einem Kollisions-Fehler automatisch eine neue ID generiert.
+function tryCreateHostRoom(attempt) {
+  if (attempt > 5) {
+    setStatus('error', 'Raum konnte nicht erstellt werden');
+    createRoomBtn.disabled = false;
+    return;
+  }
+  const candidateId = generateRoomCode();
+
+  createPeer(candidateId, (id) => {
+    roomId = id;
+    hostIdBox.style.display = 'block';
+    hostIdText.textContent = id;
+    setStatus('waiting', 'Warte auf Teilnehmer …');
+
+    // Der Host lauscht dauerhaft auf eingehende Verbindungsanfragen —
+    // beliebig viele Gäste können demselben Raum beitreten.
+    peer.on('connection', (incomingConn) => {
+      attachHostConnectionHandlers(incomingConn);
+    });
+  }, (err) => {
+    if (err.type === 'unavailable-id') {
+      if (peer) peer.destroy();
+      tryCreateHostRoom(attempt + 1);
+    } else {
+      setStatus('error', 'Verbindungsfehler');
+      createRoomBtn.disabled = false;
+    }
+  });
+}
+
+copyIdBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(hostIdText.textContent);
+    copyIdBtn.textContent = 'Kopiert ✓';
+    setTimeout(() => (copyIdBtn.textContent = 'Kopieren'), 1500);
+  } catch (e) {
+    console.warn('Zwischenablage nicht verfügbar', e);
+  }
+});
+
+// ---- OPTION B: Raum beitreten (Guest) --------------------------------------
+
+joinRoomBtn.addEventListener('click', () => {
+  const targetId = joinIdInput.value.trim().toUpperCase();
+  const pw = joinPasswordInput.value;
+  if (!targetId || !pw) return;
+
+  myRole = 'guest';
+  joinRoomBtn.disabled = true;
+  joinErrorHint.style.display = 'none';
+  setStatus('waiting', 'Verbinde …');
+
+  createPeer(null, () => {
+    // Aktiver Verbindungsaufbau zur Host-ID. PeerJS baut daraus im
+    // Hintergrund einen WebRTC-DataChannel zwischen den beiden Browsern auf.
+    hostConn = peer.connect(targetId, { reliable: true });
+    roomId = targetId;
+
+    hostConn.on('open', () => {
+      hostConn.send({
+        type: 'handshake',
+        password: pw,
+        name: myName,
+        avatar: myAvatar
+      });
+    });
+
+    hostConn.on('data', (data) => handleGuestData(data));
+
+    hostConn.on('close', () => handleDisconnect('Die Verbindung zum Host wurde beendet.'));
+    hostConn.on('error', (err) => {
+      console.error(err);
+      setStatus('error', 'Verbindungsfehler');
+      joinRoomBtn.disabled = false;
+    });
+  }, () => {
+    setStatus('error', 'Verbindungsfehler');
+    joinRoomBtn.disabled = false;
+  });
+});
+
+// =========================================================================
+// HOST-LOGIK: verwaltet beliebig viele Gäste, prüft Passwort & Namen,
+// und leitet Chat-Nachrichten an alle anderen Teilnehmer weiter.
+// =========================================================================
+
+function attachHostConnectionHandlers(connection) {
+  connection.on('data', (data) => {
+    if (data.type === 'handshake') {
+      handleHostHandshake(connection, data);
+      return;
+    }
+    if (data.type === 'chat') {
+      const entry = connections.get(connection.peer);
+      if (!entry) return;
+      // Nachricht lokal beim Host anzeigen …
+      renderMessage({ text: data.text, own: false, name: entry.name, avatar: entry.avatar });
+      // … und an alle anderen Gäste weiterleiten (Broadcast, Sender ausgenommen).
+      broadcast({
+        type: 'chat',
+        text: data.text,
+        senderId: connection.peer,
+        senderName: entry.name,
+        senderAvatar: entry.avatar
+      }, connection.peer);
+    }
+
+    if (data.type === 'call-join') {
+      const entry = connections.get(connection.peer);
+      if (!entry) return;
+      entry.inCall = true;
+      // An alle anderen Gäste weiterleiten, damit sie den neuen Anruf-Teilnehmer anrufen können.
+      broadcast({ type: 'call-join', id: connection.peer }, connection.peer);
+      refreshParticipantUI();
+    }
+
+    if (data.type === 'call-leave') {
+      const entry = connections.get(connection.peer);
+      if (!entry) return;
+      entry.inCall = false;
+      cleanupMediaConnection(connection.peer); // falls der Host selbst mit diesem Gast telefoniert hat
+      broadcast({ type: 'call-leave', id: connection.peer }, connection.peer);
+      refreshParticipantUI();
+    }
+  });
+
+  connection.on('close', () => {
+    const entry = connections.get(connection.peer);
+    if (!entry) return;
+    connections.delete(connection.peer);
+    cleanupMediaConnection(connection.peer);
+    addSystemMessage(`${entry.name} hat den Raum verlassen.`);
+    broadcast({ type: 'user-left', id: connection.peer, name: entry.name });
+    refreshParticipantUI();
+  });
+}
+
+function handleHostHandshake(connection, data) {
+  // Passwort-Prüfung: nur wer das korrekte Raum-Passwort kennt, darf beitreten.
+  if (data.password !== roomPassword) {
+    connection.send({ type: 'error', reason: 'wrong-password' });
+    setTimeout(() => connection.close(), 200);
+    return;
+  }
+
+  // Namensprüfung: kein Name darf im selben Raum doppelt vorkommen.
+  const nameTaken = data.name === myName ||
+    [...connections.values()].some((p) => p.name === data.name);
+  if (nameTaken) {
+    connection.send({ type: 'error', reason: 'name-taken' });
+    setTimeout(() => connection.close(), 200);
+    return;
+  }
+
+  // Teilnehmer aufnehmen.
+  connections.set(connection.peer, {
+    conn: connection, name: data.name, avatar: data.avatar || DEFAULT_AVATAR, role: 'guest', inCall: false
+  });
+
+  // Aktuelle Teilnehmerliste (inkl. Host, inkl. Anruf-Status) an den neuen Gast
+  // schicken, damit er sofort weiß, wer schon im Raum ist und wer bereits telefoniert.
+  const roster = [{ id: peer.id, name: myName, avatar: myAvatar, role: 'host', inCall }];
+  connections.forEach((p, id) => {
+    if (id === connection.peer) return;
+    roster.push({ id, name: p.name, avatar: p.avatar, role: 'guest', inCall: !!p.inCall });
+  });
+
+  connection.send({ type: 'handshake-ack', roster });
+
+  // Alle anderen Gäste über den Neuzugang informieren.
+  broadcast({
+    type: 'user-joined',
+    id: connection.peer, name: data.name, avatar: data.avatar || DEFAULT_AVATAR
+  }, connection.peer);
+
+  addSystemMessage(`${data.name} ist beigetreten.`);
+  enterChat();
+  refreshParticipantUI();
+}
+
+// Sendet ein Datenpaket an alle verbundenen Gäste (optional einen ausschließen).
+function broadcast(payload, excludePeerId) {
+  connections.forEach((entry, id) => {
+    if (id === excludePeerId) return;
+    try { entry.conn.send(payload); } catch (e) {}
+  });
+}
+
+// Host: einzelnen Teilnehmer kicken.
+function kickParticipant(peerId) {
+  const entry = connections.get(peerId);
+  if (!entry) return;
+  entry.conn.send({ type: 'kick' });
+  connections.delete(peerId);
+  cleanupMediaConnection(peerId);
+  addSystemMessage(`${entry.name} wurde aus dem Raum entfernt.`);
+  broadcast({ type: 'user-left', id: peerId, name: entry.name });
+  setTimeout(() => { try { entry.conn.close(); } catch (e) {} }, 150);
+  refreshParticipantUI();
+}
+
+// =========================================================================
+// GUEST-LOGIK: kommuniziert ausschließlich mit dem Host, der Nachrichten
+// und Teilnehmer-Ereignisse an alle im Raum weiterleitet.
+// =========================================================================
+
+function handleGuestData(data) {
+  switch (data.type) {
+
+    case 'handshake-ack': {
+      // Teilnehmerliste (Roster) vom Host übernehmen.
+      connections.clear();
+      data.roster.forEach((p) => {
+        if (p.id === peer.id) return;
+        connections.set(p.id, { name: p.name, avatar: p.avatar, role: p.role, inCall: !!p.inCall });
+      });
+      enterChat();
+      refreshParticipantUI();
+      break;
+    }
+
+    case 'chat': {
+      renderMessage({ text: data.text, own: false, name: data.senderName, avatar: data.senderAvatar });
+      break;
+    }
+
+    case 'user-joined': {
+      connections.set(data.id, { name: data.name, avatar: data.avatar, role: 'guest', inCall: false });
+      addSystemMessage(`${data.name} ist beigetreten.`);
+      refreshParticipantUI();
+      break;
+    }
+
+    case 'user-left': {
+      const entry = connections.get(data.id);
+      connections.delete(data.id);
+      cleanupMediaConnection(data.id);
+      addSystemMessage(`${entry ? entry.name : data.name} hat den Raum verlassen.`);
+      refreshParticipantUI();
+      break;
+    }
+
+    case 'call-join': {
+      const entry = connections.get(data.id);
+      if (entry) entry.inCall = true;
+      refreshParticipantUI();
+      break;
+    }
+
+    case 'call-leave': {
+      const entry = connections.get(data.id);
+      if (entry) entry.inCall = false;
+      cleanupMediaConnection(data.id);
+      refreshParticipantUI();
+      break;
+    }
+
+    case 'kick': {
+      handleDisconnect('Du wurdest vom Host aus dem Raum entfernt.');
+      break;
+    }
+
+    case 'error': {
+      joinRoomBtn.disabled = false;
+      if (data.reason === 'wrong-password') {
+        setStatus('error', 'Falsches Passwort');
+        joinErrorHint.textContent = 'Das eingegebene Passwort ist falsch.';
+      } else if (data.reason === 'name-taken') {
+        setStatus('error', 'Name bereits vergeben');
+        joinErrorHint.textContent = 'Dieser Name ist im Raum bereits vergeben. Bitte ändere deinen Namen.';
+      }
+      joinErrorHint.style.display = 'block';
+      break;
+    }
+  }
+}
+
+// ---- UI-Übergang: Setup → Chat ----------------------------------------------
+
+function enterChat() {
+  setupEl.style.display = 'none';
+  chatArea.classList.add('active');
+  setStatus('connected', 'Verbunden');
+
+  msgInput.disabled = false;
+  sendBtn.disabled = false;
+  chatTitle.textContent = 'Chat';
+  roomTag.textContent = 'Raum ' + roomId;
+
+  myProfileRole.textContent = myRole === 'host' ? 'Host / Admin' : 'Gast';
+
+  msgInput.focus();
+}
+
+function handleDisconnect(reason) {
+  setStatus('error', 'Getrennt');
+  addSystemMessage(reason);
+  msgInput.disabled = true;
+  sendBtn.disabled = true;
+  connections.clear();
+  refreshParticipantUI();
+
+  // Eigenen Anruf (falls aktiv) sauber beenden: Mikrofon freigeben und
+  // alle Medienverbindungen schließen, statt sie offen hängen zu lassen.
+  inCall = false;
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  mediaConnections.forEach((mc) => { try { mc.close(); } catch (e) {} });
+  mediaConnections.clear();
+  remoteAudioEls.forEach((el) => el.remove());
+  remoteAudioEls.clear();
+  updateCallButtonUI();
+
+  if (hostConn) { try { hostConn.close(); } catch (e) {} }
+  if (peer) { try { peer.destroy(); } catch (e) {} }
+  hostConn = null;
+}
+
+// ---- Teilnehmerliste rendern -------------------------------------------------
+
+function refreshParticipantUI() {
+  participantList.innerHTML = '';
+  const others = [...connections.entries()];
+
+  participantCount.textContent = others.length ? `(${others.length})` : '';
+  noPeerHint.style.display = others.length ? 'none' : 'block';
+
+  others.forEach(([id, p]) => {
+    const row = document.createElement('div');
+    row.className = 'participant-row' + (p.inCall ? ' in-call' : '');
+
+    const img = document.createElement('img');
+    img.src = p.avatar || DEFAULT_AVATAR;
+
+    const info = document.createElement('div');
+    info.className = 'info';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'name';
+    nameEl.textContent = p.name;
+    const roleEl = document.createElement('div');
+    roleEl.className = 'role';
+    roleEl.textContent = p.role === 'host' ? 'Host / Admin' : 'Gast';
+    info.appendChild(nameEl);
+    info.appendChild(roleEl);
+
+    row.appendChild(img);
+    row.appendChild(info);
+
+    if (p.inCall) {
+      const badge = document.createElement('span');
+      badge.className = 'call-badge';
+      badge.textContent = '🎤';
+      badge.title = 'Im Anruf';
+      row.appendChild(badge);
+    }
+
+    // Nur der Host sieht einen Kick-Button — und nur bei tatsächlichen Gästen.
+    if (myRole === 'host' && p.role === 'guest') {
+      const kickBtn = document.createElement('button');
+      kickBtn.className = 'btn-danger';
+      kickBtn.textContent = 'Kicken';
+      kickBtn.addEventListener('click', () => kickParticipant(id));
+      row.appendChild(kickBtn);
+    }
+
+    participantList.appendChild(row);
+  });
+}
+
+// ---- Nachrichten senden / anzeigen ------------------------------------------
+
+function addSystemMessage(text) {
+  const div = document.createElement('div');
+  div.className = 'system-msg';
+  div.textContent = text; // textContent verhindert automatisch HTML-Injection
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function renderMessage({ text, own, name, avatar }) {
+  const row = document.createElement('div');
+  row.className = 'msg-row' + (own ? ' own' : '');
+
+  const img = document.createElement('img');
+  img.className = 'msg-avatar';
+  img.src = avatar || DEFAULT_AVATAR;
+
+  const bubbleWrap = document.createElement('div');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  // escapeHtml schützt vor XSS, bevor der Text (als HTML) eingefügt wird.
+  bubble.innerHTML = escapeHtml(text);
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = (own ? 'Du' : name) + ' · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  bubbleWrap.appendChild(bubble);
+  bubbleWrap.appendChild(meta);
+  row.appendChild(img);
+  row.appendChild(bubbleWrap);
+  messagesEl.appendChild(row);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function sendMessage() {
+  const text = msgInput.value.trim();
+  if (!text) return;
+
+  if (myRole === 'host') {
+    // Host zeigt die eigene Nachricht an und verteilt sie an alle Gäste.
+    renderMessage({ text, own: true, name: myName, avatar: myAvatar });
+    broadcast({ type: 'chat', text, senderId: peer.id, senderName: myName, senderAvatar: myAvatar });
+  } else if (hostConn) {
+    // Gast schickt die Nachricht nur an den Host, der sie weiterverteilt.
+    renderMessage({ text, own: true, name: myName, avatar: myAvatar });
+    hostConn.send({ type: 'chat', text });
+  }
+  msgInput.value = '';
+}
+
+sendBtn.addEventListener('click', sendMessage);
+msgInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendMessage();
+});
+</script>
+</body>
+</html>
